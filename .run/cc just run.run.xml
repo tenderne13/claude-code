@@ -1,0 +1,8 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="cc just run" type="BunRunConfiguration">
+    <option name="applicationParameters" value="-p  -c &quot;刚才我们聊了什么&quot;" />
+    <option name="program" value="src/entrypoints/cli.tsx" />
+    <option name="workingDirectory" value="$PROJECT_DIR$" />
+    <method v="2" />
+  </configuration>
+</component>
