@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Claude Code Memory Viewer</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div class="page-noise" aria-hidden="true"></div>
+    <div class="page-orb page-orb-a" aria-hidden="true"></div>
+    <div class="page-orb page-orb-b" aria-hidden="true"></div>
+
+    <div class="page-shell">
+      <aside class="sidebar">
+        <div class="sidebar-inner">
+          <div class="brand-block">
+            <p class="eyebrow">Claude Code Memory Atlas</p>
+            <h1>Memory Viewer</h1>
+            <p class="muted">
+              以可视化工作台的方式追踪 session、query turn 与 memory 文件之间的真实关联。
+            </p>
+            <div class="brand-markers" aria-hidden="true">
+              <span></span>
+              <span></span>
+              <span></span>
+            </div>
+          </div>
+
+          <div class="sidebar-card sidebar-card-accent">
+            <p class="sidebar-title">切换项目</p>
+            <select id="project-select" title="从已知项目中选择"></select>
+            <div class="project-input-row">
+              <input
+                id="project-root-input"
+                type="text"
+                placeholder="或手动输入绝对路径…"
+                autocomplete="off"
+                spellcheck="false"
+              />
+              <button id="project-apply-btn" class="apply-btn" title="切换到该项目">↗</button>
+            </div>
+            <div id="project-switch-msg" class="project-switch-msg"></div>
+          </div>
+
+          <div class="sidebar-card">
+            <label for="session-select"><span class="term-hint" title="会话：一次持续的对话运行实例">Session</span></label>
+            <select id="session-select"></select>
+            <div class="connection-row">
+              <span id="connection-indicator" class="indicator indicator-pending"></span>
+              <span id="connection-text">等待连接</span>
+            </div>
+          </div>
+
+          <div class="sidebar-card">
+            <p class="sidebar-title">项目信息</p>
+            <dl class="meta-list">
+              <div>
+                <dt>Project Root</dt>
+                <dd id="project-root">-</dd>
+              </div>
+              <div>
+                <dt>Storage Dir</dt>
+                <dd id="project-storage">-</dd>
+              </div>
+              <div>
+                <dt>Generated</dt>
+                <dd id="generated-at">-</dd>
+              </div>
+            </dl>
+          </div>
+
+          <div class="sidebar-card sidebar-history">
+            <p class="sidebar-title">历史 Session</p>
+            <div id="session-list" class="session-list"></div>
+          </div>
+        </div>
+      </aside>
+
+      <main class="content">
+        <section class="hero">
+          <div class="hero-copy">
+            <p class="eyebrow">Realtime dossier</p>
+            <h2 id="hero-session">暂无 Session</h2>
+            <p id="hero-summary" class="muted">
+              等待载入当前项目的 session 和记忆信息。
+            </p>
+          </div>
+          <div class="hero-stats">
+            <div class="stat-card">
+              <span class="stat-label"><span class="term-hint" title="Prompt：用户当前或最近一次输入给模型的请求">Prompt</span></span>
+              <span id="last-prompt" class="stat-value">-</span>
+            </div>
+            <div class="stat-card">
+              <span class="stat-label">事件数</span>
+              <span id="event-count" class="stat-value">0</span>
+            </div>
+            <div class="stat-card">
+              <span class="stat-label">记忆触达</span>
+              <span id="activity-count" class="stat-value">0</span>
+            </div>
+          </div>
+        </section>
+
+        <nav class="view-tabs">
+          <button class="view-tab active" data-view="workbench">
+            <span class="tab-icon">◈</span> Workbench
+          </button>
+          <button class="view-tab" data-view="flow">
+            <span class="tab-icon">⟿</span> Flow
+          </button>
+        </nav>
+
+        <section id="view-workbench" class="view-content active">
+          <div class="workbench">
+            <div class="workbench-col workbench-left">
+              <article class="panel panel-tight">
+                <div class="panel-header">
+                  <h3><span class="term-hint" title="Query Turn：从一条真实用户输入开始，到下一条真实用户输入之前的这一轮上下文">Query Turns</span></h3>
+                  <span class="panel-meta">按用户输入切分的每一轮请求</span>
+                </div>
+                <div id="query-turn-list" class="query-turn-list"></div>
+              </article>
+
+              <article class="panel panel-tight">
+                <div class="panel-header">
+                  <h3>最近消息</h3>
+                  <span class="panel-meta">最近 8 条</span>
+                </div>
+                <div id="recent-messages" class="message-list"></div>
+              </article>
+            </div>
+
+            <div class="workbench-col workbench-center">
+              <article class="panel panel-tight panel-highlight">
+                <div class="panel-header">
+                  <h3><span class="term-hint" title="Selected Turn：当前选中并正在分析的那一轮请求">Selected Turn</span></h3>
+                  <span class="panel-meta">当前正在分析的那一轮 query</span>
+                </div>
+                <div id="query-turn-focus" class="focus-card"></div>
+              </article>
+
+              <article class="panel panel-tight">
+                <div class="panel-header">
+                  <h3><span class="term-hint" title="Injected Memory：本轮真正进入模型上下文窗口的记忆">Injected Memory</span></h3>
+                  <span class="panel-meta">优先显示 transcript 中精确记录的 `relevant_memories` attachment，也就是本轮真正注入模型上下文的记忆</span>
+                </div>
+                <div id="query-turn-detail" class="query-turn-detail"></div>
+              </article>
+
+              <article class="panel panel-tight">
+                <div class="panel-header">
+                  <h3><span class="term-hint" title="Session Memory：服务于当前 session 的结构化记忆摘要，不是长期 durable memory">Session Memory</span></h3>
+                  <span id="session-memory-updated" class="panel-meta">未生成</span>
+                </div>
+                <pre id="session-memory-content" class="code-block empty-state">当前 session 没有 session-memory/summary.md</pre>
+              </article>
+
+              <article class="panel panel-tight">
+                <div class="panel-header">
+                  <h3>记忆文件总览</h3>
+                  <span class="panel-meta">按存储层分组</span>
+                </div>
+                <div id="memory-groups" class="memory-groups"></div>
+              </article>
+            </div>
+
+            <div class="workbench-col workbench-right">
+              <article class="panel panel-tight">
+                <div class="panel-header">
+                  <h3><span class="term-hint" title="Turn Insights：用于解释这一轮为什么这样回答、命中了哪些记忆">Turn Insights</span></h3>
+                  <span class="panel-meta">回答、命中解释和附近 transcript</span>
+                </div>
+                <div id="turn-insights" class="insight-stack"></div>
+              </article>
+
+              <article class="panel panel-tight">
+                <div class="panel-header">
+                  <h3><span class="term-hint" title="Recall Candidates：由读取轨迹推断的关联记忆候选，可能参与了回答，但不一定真正注入">Recall Candidates</span></h3>
+                  <span class="panel-meta">由本 session 的读取轨迹推断，表示可能参与了回答的记忆候选</span>
+                </div>
+                <div id="recall-candidates" class="memory-item-list"></div>
+              </article>
+
+              <article class="panel panel-tight">
+                <div class="panel-header">
+                  <h3>记忆访问轨迹</h3>
+                  <span class="panel-meta">从 session transcript 提取</span>
+                </div>
+                <div id="memory-activity" class="activity-list"></div>
+              </article>
+
+              <article class="panel panel-tight">
+                <div class="panel-header">
+                  <h3>流转时间线</h3>
+                  <span class="panel-meta">消息、记忆读写、session memory 更新合并视图</span>
+                </div>
+                <div id="timeline" class="timeline-list"></div>
+              </article>
+
+              <article class="panel panel-tight">
+                <div class="panel-header">
+                  <h3>记忆索引</h3>
+                  <span class="panel-meta">MEMORY.md 等入口文件</span>
+                </div>
+                <div id="memory-indexes" class="memory-index-list"></div>
+              </article>
+            </div>
+          </div>
+        </section>
+
+        <section id="view-flow" class="view-content">
+          <div class="flow-container">
+            <div class="flow-header">
+              <div class="flow-title">
+                <h3>执行流程</h3>
+                <span id="flow-turn-indicator" class="panel-meta">选择左侧 turn 以查看流程</span>
+              </div>
+              <div class="flow-filters">
+                <label class="filter-toggle">
+                  <input type="checkbox" id="filter-injected" checked />
+                  <span class="filter-label">✓ Injected</span>
+                </label>
+                <label class="filter-toggle">
+                  <input type="checkbox" id="filter-writes" checked />
+                  <span class="filter-label">✎ Writes</span>
+                </label>
+                <label class="filter-toggle">
+                  <input type="checkbox" id="filter-session" checked />
+                  <span class="filter-label">◉ Session</span>
+                </label>
+              </div>
+            </div>
+            <div id="flow-diagram" class="flow-diagram">
+              <div class="flow-empty">
+                <p>选择一个 Query Turn 以查看执行流程图</p>
+                <p class="muted">流程图将展示当前轮次的主执行链路及 memory 读写事件</p>
+              </div>
+            </div>
+            <div id="flow-legend" class="flow-legend">
+              <div class="legend-item">
+                <span class="legend-dot done"></span>
+                <span>已完成</span>
+              </div>
+              <div class="legend-item">
+                <span class="legend-dot active"></span>
+                <span>当前</span>
+              </div>
+              <div class="legend-item">
+                <span class="legend-dot inferred"></span>
+                <span>推断</span>
+              </div>
+              <div class="legend-item">
+                <span class="legend-dot missing"></span>
+                <span>缺失</span>
+              </div>
+              <div class="legend-separator"></div>
+              <div class="legend-item">
+                <span class="legend-edge inject"></span>
+                <span>Memory 注入</span>
+              </div>
+              <div class="legend-item">
+                <span class="legend-edge write"></span>
+                <span>Memory 写入</span>
+              </div>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div id="flow-memory-detail" class="flow-memory-panel"></div>
+
+    <script src="/static/app.js" defer></script>
+  </body>
+</html>
