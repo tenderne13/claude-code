@@ -20,6 +20,7 @@ import type {
 import type { TextBlockParam } from '@anthropic-ai/sdk/resources/index.mjs'
 import type { Stream } from '@anthropic-ai/sdk/streaming.mjs'
 import { randomUUID } from 'crypto'
+import { appendFileSync, mkdirSync } from 'fs'
 import {
   getAPIProvider,
   isFirstPartyAnthropicBaseUrl,
@@ -1820,6 +1821,22 @@ async function* queryModel(
         // BetaMessageStream calls partialParse() on every input_json_delta, which we don't need
         // since we handle tool input accumulation ourselves
         // biome-ignore lint/plugin: main conversation loop handles attribution separately
+        const logEntry = {
+          timestamp: new Date().toISOString(),
+          model: params.model,
+          messages: params.messages,
+          system: params.system,
+          tools: params.tools,
+          max_tokens: params.max_tokens,
+          thinking: params.thinking,
+          temperature: params.temperature,
+          betas: params.betas,
+          output_config: params.output_config,
+          metadata: params.metadata,
+        }
+        mkdirSync('logs', { recursive: true })
+        const logFile = `logs/${getSessionId()}.jsonl`
+        appendFileSync(logFile, JSON.stringify(logEntry) + '\n')
         const result = await anthropic.beta.messages
           .create(
             { ...params, stream: true },

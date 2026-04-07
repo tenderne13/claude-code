@@ -279,6 +279,91 @@ flowchart TD
     L --> M[记录写入路径并更新 UI 提示]
 ```
 
+```mermaid
+flowchart TD
+    Start(["runExtraction 开始"]) --> A["解构参数: context, appendSystemMessage, isTrailingRun"]
+    A --> B["从 context 中获取 messages"]
+    B --> C["获取 memoryDir = getAutoMemPath()"]
+    C --> D["计算 newMessageCount = countModelVisibleMessagesSince(messages, lastMemoryMessageUuid)"]
+
+    D --> E{"hasMemoryWritesSince?\n主Agent是否已写入过记忆文件?"}
+    E -- 是 --> F["logForDebugging: 跳过提取"]
+    F --> F1["更新 lastMemoryMessageUuid = messages最后一条的uuid"]
+    F1 --> F2["logEvent: tengu_extract_memories_skipped_direct_write"]
+    F2 --> Return1(["return 提前退出"])
+
+    E -- 否 --> G["获取 teamMemoryEnabled\n(TEAMMEM feature flag)"]
+    G --> H["获取 skipIndex\n(tengu_moth_copse feature flag)"]
+    H --> I["创建 canUseTool = createAutoMemCanUseTool(memoryDir)"]
+    I --> J["创建 cacheSafeParams = createCacheSafeParams(context)"]
+
+    J --> K{"isTrailingRun?\n是否为尾随运行?"}
+    K -- 否 --> L["turnsSinceLastExtraction++"]
+    L --> M{"turnsSinceLastExtraction < 阈值?\n(tengu_bramble_lintel, 默认1)"}
+    M -- 是 --> Return2(["return 未达轮次阈值,跳过"])
+    M -- 否 --> N["turnsSinceLastExtraction = 0"]
+    K -- 是 --> N
+
+    N --> O["设置 inProgress = true"]
+    O --> P["记录 startTime = Date.now()"]
+
+    P --> Q["try 块开始"]
+    Q --> R["logForDebugging: 开始提取"]
+    R --> S["扫描已有记忆文件\nscanMemoryFiles(memoryDir)"]
+    S --> T["格式化记忆清单\nformatMemoryManifest()"]
+
+    T --> U{"TEAMMEM && teamMemoryEnabled?"}
+    U -- 是 --> V["userPrompt = buildExtractCombinedPrompt(\nnewMessageCount, existingMemories, skipIndex)"]
+    U -- 否 --> W["userPrompt = buildExtractAutoOnlyPrompt(\nnewMessageCount, existingMemories, skipIndex)"]
+
+    V --> X["调用 runForkedAgent"]
+    W --> X
+
+    X --> X1["runForkedAgent 参数:\n- promptMessages: userPrompt\n- cacheSafeParams\n- canUseTool\n- querySource: 'extract_memories'\n- forkLabel: 'extract_memories'\n- skipTranscript: true\n- maxTurns: 5"]
+
+    X1 --> Y["获取 result (forkedAgent 结果)"]
+
+    Y --> Z["更新游标\nlastMemoryMessageUuid = messages最后一条的uuid"]
+    Z --> AA["提取写入路径\nwrittenPaths = extractWrittenPaths(result.messages)"]
+    AA --> AB["统计 turnCount (assistant消息数)"]
+
+    AB --> AC["计算缓存命中率\ntotalInput / cache_read 百分比"]
+    AC --> AD["logForDebugging: 完成信息 + 缓存统计"]
+
+    AD --> AE{"writtenPaths.length > 0?"}
+    AE -- 是 --> AF["logForDebugging: 列出保存的记忆文件路径"]
+    AE -- 否 --> AG["logForDebugging: 本次无记忆保存"]
+
+    AF --> AH["过滤 memoryPaths\n(排除 ENTRYPOINT_NAME 索引文件)"]
+    AG --> AH
+
+    AH --> AI["统计 teamCount\n(TEAMMEM下的团队记忆数)"]
+    AI --> AJ["logEvent: tengu_extract_memories_extraction\n(记录详细usage指标)"]
+
+    AJ --> AK{"memoryPaths.length > 0?"}
+    AK -- 是 --> AL["创建 memorySavedMessage"]
+    AL --> AM{"TEAMMEM feature?"}
+    AM -- 是 --> AN["msg.teamCount = teamCount"]
+    AN --> AO["appendSystemMessage?.(msg)\n通知主线程记忆已保存"]
+    AM -- 否 --> AO
+    AK -- 否 --> Finally
+
+    AO --> Finally
+
+    Q -- "catch(error)" --> Catch["logForDebugging: 记录错误"]
+    Catch --> CatchLog["logEvent: tengu_extract_memories_error\n+ duration_ms"]
+    CatchLog --> Finally
+
+    Finally["finally 块"] --> FIN1["设置 inProgress = false"]
+    FIN1 --> FIN2["获取 trailing = pendingContext"]
+    FIN2 --> FIN3["pendingContext = undefined"]
+    FIN3 --> FIN4{"trailing 存在?\n(有挂起的提取请求?)"}
+    FIN4 -- 是 --> FIN5["logForDebugging: 运行尾随提取"]
+    FIN5 --> FIN6["递归调用 runExtraction\nisTrailingRun = true\n使用 trailing.context"]
+    FIN6 --> End(["runExtraction 结束"])
+    FIN4 -- 否 --> End
+```
+
 ## 8. 对车机智能语音座舱的借鉴意义
 
 - 车机主对话链路不应承担全部记忆沉淀工作，否则会拉长交互尾延迟。
