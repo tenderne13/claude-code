@@ -122,14 +122,16 @@ textarea {
   position: sticky;
   top: 22px;
   align-self: start;
-  min-height: calc(100vh - 44px);
+  height: calc(100vh - 44px);
+  max-height: calc(100vh - 44px);
   border-radius: 32px;
   border: 1px solid var(--line);
   background:
     linear-gradient(180deg, rgba(249, 255, 253, 0.92), rgba(238, 249, 247, 0.82)),
     var(--bg-soft);
   box-shadow: var(--shadow);
-  overflow: hidden;
+  overflow-y: auto;
+  overflow-x: hidden;
   backdrop-filter: blur(18px);
 }
 

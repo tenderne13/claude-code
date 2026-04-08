@@ -21,6 +21,72 @@
 - 内容文件：按 topic 拆分的独立 markdown 文件
 - 元信息：frontmatter 中至少包含 `name`、`description`、`type`
 
+```mermaid
+flowchart TD
+    A["auto-memory 目录"]
+    B["MEMORY.md 主索引"]
+
+    subgraph R["读取流程"]
+        C["会话启动或用户发问"]
+        D["先读取 MEMORY.md"]
+        E["根据索引定位相关 topic memory 文件"]
+        F["按需加载 memory 文件正文"]
+        G["将相关 memory 注入当前上下文"]
+    end
+
+    subgraph T["topic memory files"]
+        H["user-profile.md"]
+        I["project-context.md"]
+        J["reference-links.md"]
+    end
+
+    A --> B
+    A --> T
+    C --> D
+    D --> E
+    B -->|提供文件清单与摘要| E
+    E --> H
+    E --> I
+    E --> J
+    H --> F
+    I --> F
+    J --> F
+    F --> G
+```
+
+```mermaid
+flowchart TD
+    A["auto-memory 目录"]
+    B["MEMORY.md 主索引"]
+
+    subgraph W["写入流程"]
+        C["主回合或 extractMemories 发现可持久化事实"]
+        D["选择或新建 topic memory 文件"]
+        E["写入或更新 memory 正文"]
+        F["回写 MEMORY.md 索引"]
+        G["后续会话可再次通过索引召回"]
+    end
+
+    subgraph T["topic memory files"]
+        H["user-profile.md"]
+        I["project-context.md"]
+        J["reference-links.md"]
+    end
+
+    A --> B
+    A --> T
+    C --> D
+    D --> H
+    D --> I
+    D --> J
+    H --> E
+    I --> E
+    J --> E
+    E --> F
+    F --> B
+    B --> G
+```
+
 ### 2.2 读取
 
 - 会话启动时，可能读取 `MEMORY.md` 作为索引入口
