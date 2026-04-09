@@ -110,6 +110,7 @@ import {
 } from './bootstrap/state.js'
 import { createBudgetTracker, checkTokenBudget } from './query/tokenBudget.js'
 import { count } from './utils/array.js'
+import { writeToStderr } from './utils/process.js'
 
 /* eslint-disable @typescript-eslint/no-require-imports */
 const snipModule = feature('HISTORY_SNIP')
@@ -249,6 +250,10 @@ async function* queryLoop(
   | ToolUseSummaryMessage,
   Terminal
 > {
+  const emitMemoryPrefetchLog = (message: string): void => {
+    logForDebugging(message)
+    writeToStderr(`${message}\n`)
+  }
   // Immutable params — never reassigned during the query loop.
   const {
     systemPrompt,
@@ -1604,6 +1609,9 @@ async function* queryLoop(
       pendingMemoryPrefetch.settledAt !== null &&
       pendingMemoryPrefetch.consumedOnIteration === -1
     ) {
+      emitMemoryPrefetchLog(
+        `[MEMDIR_PREFETCH] consume ready turn=${turnCount} settled_at=${pendingMemoryPrefetch.settledAt} consumed_on_iteration=${pendingMemoryPrefetch.consumedOnIteration}`,
+      )
       const memoryAttachments = filterDuplicateMemoryAttachments(
         await pendingMemoryPrefetch.promise,
         toolUseContext.readFileState,
@@ -1614,6 +1622,13 @@ async function* queryLoop(
         toolResults.push(msg)
       }
       pendingMemoryPrefetch.consumedOnIteration = turnCount - 1
+      emitMemoryPrefetchLog(
+        `[MEMDIR_PREFETCH] consume complete turn=${turnCount} attachment_count=${memoryAttachments.length} consumed_on_iteration=${pendingMemoryPrefetch.consumedOnIteration}`,
+      )
+    } else if (pendingMemoryPrefetch) {
+      emitMemoryPrefetchLog(
+        `[MEMDIR_PREFETCH] consume skipped turn=${turnCount} settled=${pendingMemoryPrefetch.settledAt !== null} consumed_on_iteration=${pendingMemoryPrefetch.consumedOnIteration}`,
+      )
     }
 
 

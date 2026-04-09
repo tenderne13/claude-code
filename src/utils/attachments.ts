@@ -115,6 +115,7 @@ import {
   createChildAbortController,
 } from './abortController.js'
 import { isAbortError } from './errors.js'
+import { writeToStderr } from './process.js'
 import {
   getFileModificationTimeAsync,
   isFileWithinReadSizeLimit,
@@ -2363,26 +2364,38 @@ export function startRelevantMemoryPrefetch(
   messages: ReadonlyArray<Message>,
   toolUseContext: ToolUseContext,
 ): MemoryPrefetch | undefined {
+  const emitLog = (message: string): void => {
+    logForDebugging(message)
+    writeToStderr(`${message}\n`)
+  }
   if (
-    !isAutoMemoryEnabled() ||
-    !getFeatureValue_CACHED_MAY_BE_STALE('tengu_moth_copse', false)
+    !isAutoMemoryEnabled() //||
+    //!getFeatureValue_CACHED_MAY_BE_STALE('tengu_moth_copse', false)
   ) {
+    emitLog('[MEMDIR_PREFETCH] skip start: auto memory disabled')
     return undefined
   }
 
   const lastUserMessage = messages.findLast(m => m.type === 'user' && !m.isMeta)
   if (!lastUserMessage) {
+    emitLog('[MEMDIR_PREFETCH] skip start: no last user message')
     return undefined
   }
 
   const input = getUserMessageText(lastUserMessage)
   // Single-word prompts lack enough context for meaningful term extraction
-  if (!input || !/\s/.test(input.trim())) {
+  if (!input || input.trim().length < 5) {
+    emitLog(
+      `[MEMDIR_PREFETCH] skip start: input too short length=${input?.trim().length ?? 0}`,
+    )
     return undefined
   }
 
   const surfaced = collectSurfacedMemories(messages)
   if (surfaced.totalBytes >= RELEVANT_MEMORIES_CONFIG.MAX_SESSION_BYTES) {
+    emitLog(
+      `[MEMDIR_PREFETCH] skip start: surfaced bytes limit reached total_bytes=${surfaced.totalBytes}`,
+    )
     return undefined
   }
 
@@ -2390,6 +2403,9 @@ export function startRelevantMemoryPrefetch(
   // immediately, not just on [Symbol.dispose] when queryLoop exits.
   const controller = createChildAbortController(toolUseContext.abortController)
   const firedAt = Date.now()
+  emitLog(
+    `[MEMDIR_PREFETCH] started input=${JSON.stringify(input)} surfaced_paths=${surfaced.paths.size} parent_aborted=${toolUseContext.abortController.signal.aborted}`,
+  )
   const promise = getRelevantMemoryAttachments(
     input,
     toolUseContext.options.agentDefinitions.activeAgents,
@@ -2398,6 +2414,10 @@ export function startRelevantMemoryPrefetch(
     controller.signal,
     surfaced.paths,
   ).catch(e => {
+    const errorText = e instanceof Error ? `${e.name}: ${e.message}` : String(e)
+    emitLog(
+      `[MEMDIR_PREFETCH] promise_failed aborted=${controller.signal.aborted} is_abort=${isAbortError(e)} error=${JSON.stringify(errorText)}`,
+    )
     if (!isAbortError(e)) {
       logError(e)
     }
@@ -2409,6 +2429,9 @@ export function startRelevantMemoryPrefetch(
     settledAt: null,
     consumedOnIteration: -1,
     [Symbol.dispose]() {
+      emitLog(
+        `[MEMDIR_PREFETCH] dispose aborting settled=${handle.settledAt !== null} consumed_on_iteration=${handle.consumedOnIteration} child_aborted_before=${controller.signal.aborted}`,
+      )
       controller.abort()
       logEvent('tengu_memdir_prefetch_collected', {
         hidden_by_first_iteration:
@@ -2420,6 +2443,9 @@ export function startRelevantMemoryPrefetch(
   }
   void promise.finally(() => {
     handle.settledAt = Date.now()
+    emitLog(
+      `[MEMDIR_PREFETCH] settled latency_ms=${handle.settledAt - firedAt} consumed_on_iteration=${handle.consumedOnIteration} child_aborted=${controller.signal.aborted}`,
+    )
   })
   return handle
 }

@@ -17,6 +17,7 @@ import { getAnthropicClient } from '../services/api/client.js'
 import { getModelBetas, modelSupportsStructuredOutputs } from './betas.js'
 import { computeFingerprint } from './fingerprint.js'
 import { normalizeModelStringForAPI } from './model/model.js'
+import { writeToStderr } from './process.js'
 
 type MessageParam = Anthropic.MessageParam
 type TextBlockParam = Anthropic.TextBlockParam
@@ -105,6 +106,9 @@ function extractFirstUserMessageText(messages: MessageParam[]): string {
  * await sideQuery({ querySource: 'model_validation', model, max_tokens: 1, messages: [{ role: 'user', content: 'Hi' }] })
  */
 export async function sideQuery(opts: SideQueryOptions): Promise<BetaMessage> {
+  const emitLog = (message: string): void => {
+    writeToStderr(`${message}\n`)
+  }
   const {
     model,
     system,
@@ -121,11 +125,18 @@ export async function sideQuery(opts: SideQueryOptions): Promise<BetaMessage> {
     stop_sequences,
   } = opts
 
+  emitLog(
+    `[SIDEQUERY_TRACE] enter querySource=${opts.querySource} model=${model} signal_aborted=${signal?.aborted ?? false}`,
+  )
+
   const client = await getAnthropicClient({
     maxRetries,
     model,
     source: 'side_query',
   })
+  emitLog(
+    `[SIDEQUERY_TRACE] client_ready querySource=${opts.querySource} model=${model}`,
+  )
   const betas = [...getModelBetas(model)]
   // Add structured-outputs beta if using output_format and provider supports it
   if (
@@ -178,23 +189,37 @@ export async function sideQuery(opts: SideQueryOptions): Promise<BetaMessage> {
 
   const normalizedModel = normalizeModelStringForAPI(model)
   const start = Date.now()
-  // biome-ignore lint/plugin: this IS the wrapper that handles OAuth attribution
-  const response = await client.beta.messages.create(
-    {
-      model: normalizedModel,
-      max_tokens,
-      system: systemBlocks,
-      messages,
-      ...(tools && { tools }),
-      ...(tool_choice && { tool_choice }),
-      ...(output_format && { output_config: { format: output_format } }),
-      ...(temperature !== undefined && { temperature }),
-      ...(stop_sequences && { stop_sequences }),
-      ...(thinkingConfig && { thinking: thinkingConfig }),
-      ...(betas.length > 0 && { betas }),
-      metadata: getAPIMetadata(),
-    },
-    { signal },
+  emitLog(
+    `[SIDEQUERY_TRACE] before_create querySource=${opts.querySource} normalizedModel=${normalizedModel} signal_aborted=${signal?.aborted ?? false} messages=${messages.length} system_blocks=${systemBlocks.length} tools=${tools?.length ?? 0} betas=${betas.length} output_format=${output_format ? output_format.type : 'none'}`,
+  )
+  const requestPayload = {
+    model: normalizedModel,
+    max_tokens,
+    system: systemBlocks,
+    messages,
+    ...(tools && { tools }),
+    ...(tool_choice && { tool_choice }),
+    ...(output_format && { output_config: { format: output_format } }),
+    ...(temperature !== undefined && { temperature }),
+    ...(stop_sequences && { stop_sequences }),
+    ...(thinkingConfig && { thinking: thinkingConfig }),
+    ...(betas.length > 0 && { betas }),
+    metadata: getAPIMetadata(),
+  }
+  let response: BetaMessage
+  try {
+    // biome-ignore lint/plugin: this IS the wrapper that handles OAuth attribution
+    response = await client.beta.messages.create(requestPayload, { signal })
+  } catch (error) {
+    const errorText =
+      error instanceof Error ? `${error.name}: ${error.message}` : String(error)
+    emitLog(
+      `[SIDEQUERY_TRACE] create_failed querySource=${opts.querySource} normalizedModel=${normalizedModel} signal_aborted=${signal?.aborted ?? false} error=${JSON.stringify(errorText)}`,
+    )
+    throw error
+  }
+  emitLog(
+    `[SIDEQUERY_TRACE] create_resolved querySource=${opts.querySource} normalizedModel=${normalizedModel} stop_reason=${response.stop_reason ?? 'unknown'} duration_ms=${Date.now() - start}`,
   )
 
   const requestId =

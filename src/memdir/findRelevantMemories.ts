@@ -2,6 +2,7 @@ import { feature } from 'bun:bundle'
 import { logForDebugging } from '../utils/debug.js'
 import { errorMessage } from '../utils/errors.js'
 import { getDefaultSonnetModel } from '../utils/model/model.js'
+import { writeToStderr } from '../utils/process.js'
 import { sideQuery } from '../utils/sideQuery.js'
 import { jsonParse } from '../utils/slowOperations.js'
 import {
@@ -21,6 +22,9 @@ Return a list of filenames for the memories that will clearly be useful to Claud
 - If you are unsure if a memory will be useful in processing the user's query, then do not include it in your list. Be selective and discerning.
 - If there are no memories in the list that would clearly be useful, feel free to return an empty list.
 - If a list of recently-used tools is provided, do not select memories that are usage reference or API documentation for those tools (Claude Code is already exercising them). DO still select memories containing warnings, gotchas, or known issues about those tools — active use is exactly when those matter.
+- You must return only valid JSON matching this exact shape: {"selected_memories":["file1.md","file2.md"]}.
+- Do not return Markdown, code fences, commentary, explanations, or any text before or after the JSON object.
+- Every item in selected_memories must be an exact filename from the provided memory list.
 `
 
 /**
@@ -80,6 +84,11 @@ async function selectRelevantMemories(
   signal: AbortSignal,
   recentTools: readonly string[],
 ): Promise<string[]> {
+  const logPrefix = '[MEMDIR_SIDEQUERY]'
+  const emitLog = (message: string, level: 'info' | 'warn' = 'info'): void => {
+    logForDebugging(message, { level })
+    writeToStderr(`${message}\n`)
+  }
   const validFilenames = new Set(memories.map(m => m.filename))
 
   const manifest = formatMemoryManifest(memories)
@@ -95,6 +104,11 @@ async function selectRelevantMemories(
       : ''
 
   try {
+    emitLog(
+      `${logPrefix} start selectRelevantMemories: memories=${memories.length}, recentTools=${recentTools.length}, query=${JSON.stringify(query)}`,
+      'info',
+    )
+
     const result = await sideQuery({
       model: getDefaultSonnetModel(),
       system: SELECT_MEMORIES_SYSTEM_PROMPT,
@@ -121,20 +135,36 @@ async function selectRelevantMemories(
       querySource: 'memdir_relevance',
     })
 
+    emitLog(
+      `${logPrefix} sideQuery completed: stop_reason=${result.stop_reason ?? 'unknown'}, content_blocks=${result.content.length}, input_tokens=${result.usage.input_tokens}, output_tokens=${result.usage.output_tokens}`,
+      'info',
+    )
+
     const textBlock = result.content.find(block => block.type === 'text')
+    emitLog(
+		`${logPrefix} textBlock result: ${JSON.stringify(textBlock, null, 2)}`,
+      'info',
+	)
     if (!textBlock || textBlock.type !== 'text') {
+      emitLog(`${logPrefix} sideQuery returned without text block`, 'warn')
       return []
     }
 
     const parsed: { selected_memories: string[] } = jsonParse(textBlock.text)
-    return parsed.selected_memories.filter(f => validFilenames.has(f))
+    const filtered = parsed.selected_memories.filter(f => validFilenames.has(f))
+    emitLog(
+      `${logPrefix} parsed selected_memories: raw=${parsed.selected_memories.length}, valid=${filtered.length}, selected=${JSON.stringify(filtered)}`,
+      'info',
+    )
+    return filtered
   } catch (e) {
     if (signal.aborted) {
+      emitLog(`${logPrefix} aborted before sideQuery completed`, 'warn')
       return []
     }
-    logForDebugging(
-      `[memdir] selectRelevantMemories failed: ${errorMessage(e)}`,
-      { level: 'warn' },
+    emitLog(
+      `${logPrefix} selectRelevantMemories failed: ${errorMessage(e)}`,
+      'warn',
     )
     return []
   }
