@@ -54,13 +54,12 @@
 
 因此 `iota` 的 consolidation 不能按“全局统一做梦”设计，而必须按隔离域执行。最小治理单元建议是：
 
-- `tenant_id + user_scope_id`
-- `tenant_id + project_scope_id`
-- `tenant_id + agent_namespace`
+- `user_scope_id`
+- `project_scope_id`
+- `agent_namespace`
 
 所有 consolidation job、memory query、memory write、change event 都必须带：
 
-- `tenant_id`
 - `isolation_key`
 - `scope_type`
 - `scope_id`
@@ -106,7 +105,6 @@
 
 事件中建议带上：
 
-- `tenant_id`
 - `isolation_key`
 - `memory_id`
 - `previous_memory_id` / `superseded_ids`
@@ -135,7 +133,7 @@
 ### P3：补齐改写事件与审计
 
 - 发布 `MemoryChangedEvent`
-- 提供按 tenant / user / project 查询的审计视图
+- 提供按 user / project / namespace 查询的审计视图
 - 支持回看某次 consolidation 改了哪些记忆
 
 ## 8. 一句话建议
@@ -145,6 +143,6 @@
 - 智能整理在 `iota-core`
 - memory domain 在 `iota-memory`
 - 改写事件正式化
-- 所有能力按 `tenant + scope` 隔离运行
+- 所有能力按 `scope + isolation_key` 隔离运行
 
 这样既能对齐 `autoDream` 的核心价值，也不会破坏 `iota` 现有服务边界。

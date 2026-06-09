@@ -337,7 +337,6 @@ Session transcripts：`<transcriptDir>`
 
 这个主体边界至少可能包括：
 
-- `tenant_id`
 - `user_scope_id`
 - `project_scope_id`
 - `session_scope_id`
@@ -345,9 +344,9 @@ Session transcripts：`<transcriptDir>`
 
 因此 dream/consolidation 的最小调度单元不能是“整个系统”，而应是某个隔离键，例如：
 
-- `tenant_id + user_scope_id`
-- `tenant_id + project_scope_id`
-- `tenant_id + agent_namespace`
+- `user_scope_id`
+- `project_scope_id`
+- `agent_namespace`
 
 ### 5.2 多用户场景下的设计影响
 
@@ -363,10 +362,10 @@ Session transcripts：`<transcriptDir>`
    某个 consolidation job 只能改写自己隔离域内的 memory，不能动别的用户或别的项目的 active 记录。
 
 4. 事件归属  
-   `MemoryChangedEvent` 必须带 tenant/scope 归属，否则后续审计与消费都会混乱。
+   `MemoryChangedEvent` 必须带 scope / isolation 归属，否则后续审计与消费都会混乱。
 
 5. 运维观测  
-   后台任务、事件、失败重试、热点用户都要能按 tenant / user / project 分桶观测。
+   后台任务、事件、失败重试、热点用户都要能按 user / project / namespace 分桶观测。
 
 ### 5.3 对当前方案的直接修正
 
@@ -468,7 +467,7 @@ flowchart LR
 
 这里需要再补一条多用户约束：
 
-- 每个 consolidation job 必须绑定明确的隔离键，例如 `tenant_id + user_scope_id + project_scope_id`
+- 每个 consolidation job 必须绑定明确的隔离键，例如 `user_scope_id + project_scope_id`
 - job 的查询范围、改写范围、事件范围都不得越过该边界
 
 ---
@@ -509,7 +508,6 @@ Claude Code 的组织方式：
 一次 consolidation job 建议输入以下对象：
 
 - `job_id`
-- `tenant_id`
 - `isolation_key`
 - `scopes`
   - `user_scope_id`
@@ -531,7 +529,7 @@ Claude Code 的组织方式：
 
 多用户场景下再补一条：
 
-- `candidate_active_memories` 的读取条件必须同时包含 `tenant_id` 与相关 scope，禁止只按文本或 selector 做宽查询
+- `candidate_active_memories` 的读取条件必须同时包含 `isolation_key` 与相关 scope，禁止只按文本或 selector 做宽查询
 
 ### 8.4 建议的整理决策类型
 
@@ -622,7 +620,6 @@ Claude Code 的组织方式：
 | --- | --- |
 | `event_id` | 唯一事件 ID |
 | `event_type` | `created` / `updated` / `superseded` / `deleted` / `merged` |
-| `tenant_id` | 多租户归属 |
 | `isolation_key` | 本次改写所属隔离键 |
 | `memory_id` | 当前记录 ID |
 | `previous_memory_ids` | 被替换的旧记录 ID 列表 |
@@ -675,7 +672,7 @@ Claude Code 的组织方式：
 - 基于 Redis session store 做时间门控
 - 统计自上次 consolidation 以来的 session 数
 - 维护分布式锁，避免多实例并发整理
-- 按 `tenant/user/project/namespace` 维度分片调度
+- 按 `user/project/namespace` 维度分片调度
 - 构造整理输入
 - 调用模型或独立 agent 完成 consolidation 决策
 - 调用 `iota-memory` 的 memory query / write / supersede / delete 接口
@@ -733,7 +730,7 @@ Claude Code 的组织方式：
   - `min_hours`
   - `min_sessions`
   - distributed lock
-  - tenant-aware shard key
+  - scope-aware shard key
   - recent session scan
   - job state
 
@@ -767,7 +764,7 @@ Claude Code 的组织方式：
 - 增加 `MemoryChangedEvent`
 - 增加 outbox 表或 stream
 - 对 supersede/delete/create 全量发事件
-- 事件必须带 `tenant_id + isolation_key + scope`
+- 事件必须带 `isolation_key + scope`
 
 交付结果：
 
@@ -780,7 +777,7 @@ Claude Code 的组织方式：
 - 增加 memory manifest 视图
 - 展示 active/superseded/deleted
 - 展示 supersede 链和 source sessions
-- 支持按 tenant / user / project 维度过滤
+- 支持按 user / project / namespace 维度过滤
 
 交付结果：
 
@@ -818,11 +815,11 @@ Claude Code 的组织方式：
 
 - A 用户的 transcript 触发了 B 用户 memory 的改写
 - 同项目不同用户的偏好被错误合并
-- 不同 tenant 之间共享了 selector axis 命中结果
+- 不同用户或不同项目之间共享了 selector axis 命中结果
 
 控制建议：
 
-- 所有 job、query、event 强制带 `tenant_id`
+- 所有 job、query、event 强制带 `isolation_key`
 - 所有 mutation API 必须校验 scope 与 isolation key
 - selector merge 只能在同隔离域内执行
 - 审计日志必须能还原“谁改了谁”的完整边界
@@ -871,4 +868,4 @@ ledger 成功、index 失败、event 成功或失败的顺序不一致，会带�
 
 补充多用户版本的表达可以直接说：
 
-> Claude Code 和 Hermes 的原始 memory 机制主要服务单用户工作流，而 iota 是多用户服务化场景，所以我们的 consolidation 不能做成“全局做梦”，而必须做成“按 tenant/user/project 隔离域执行的后台记忆整理任务”。这样才能既复用 autoDream 的能力思想，又不破坏多用户隔离边界。
+> Claude Code 和 Hermes 的原始 memory 机制主要服务单用户工作流，而 iota 是多用户服务化场景，所以我们的 consolidation 不能做成“全局做梦”，而必须做成“按 user/project/namespace 隔离域执行的后台记忆整理任务”。这样才能既复用 autoDream 的能力思想，又不破坏多用户隔离边界。
