@@ -12,6 +12,8 @@
 6. [06-extract-memories-analysis.md](/Users/lixp/lxpConfig/pyWorkSpace/claude-code/memory_design/06-extract-memories-analysis.md)
 7. [07-agent-memory-analysis.md](/Users/lixp/lxpConfig/pyWorkSpace/claude-code/memory_design/07-agent-memory-analysis.md)
 8. [08-remember-skill-analysis.md](/Users/lixp/lxpConfig/pyWorkSpace/claude-code/memory_design/08-remember-skill-analysis.md)
+9. [09-iota-autodream-alignment-solution.md](/Users/lixp/lxpConfig/pyWorkSpace/claude-code/memory_design/09-iota-autodream-alignment-solution.md)
+10. [10-iota-autodream-alignment-summary.md](/Users/lixp/lxpConfig/pyWorkSpace/claude-code/memory_design/10-iota-autodream-alignment-summary.md)
 
 ## 建议阅读顺序
 

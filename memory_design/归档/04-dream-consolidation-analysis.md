@@ -53,10 +53,10 @@ runConsolidation():
 
 ### 4.1 四阶段工作流
 
-- Orient：先理解当前 memory landscape，而不是盲目重写。
-- Gather recent signal：优先读取 daily logs，再看 drift 与 transcripts。
-- Consolidate：把值得长期保存的信息并入 topic files。
-- Prune and index：清理过期入口，保持索引简短。
+- 定向（Orient）：先理解当前 memory landscape，而不是盲目重写。
+- 采集近期信号（Gather recent signal）：优先读取 daily logs，再看 drift 与 transcripts。
+- 整合（Consolidate）：把值得长期保存的信息并入 topic files。
+- 裁剪与索引（Prune and index）：清理过期入口，保持索引简短。
 
 ### 4.2 与 extractMemories 的区别
 
