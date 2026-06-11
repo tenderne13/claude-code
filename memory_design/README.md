@@ -14,6 +14,8 @@
 8. [08-remember-skill-analysis.md](/Users/lixp/lxpConfig/pyWorkSpace/claude-code/memory_design/08-remember-skill-analysis.md)
 9. [09-iota-autodream-alignment-solution.md](/Users/lixp/lxpConfig/pyWorkSpace/claude-code/memory_design/09-iota-autodream-alignment-solution.md)
 10. [10-iota-autodream-alignment-summary.md](/Users/lixp/lxpConfig/pyWorkSpace/claude-code/memory_design/10-iota-autodream-alignment-summary.md)
+11. [11-session-evidence-dual-memory-pipeline.md](/Users/lixp7/workspace/pyWorkspace/claude-code/memory_design/11-session-evidence-dual-memory-pipeline.md)
+12. [12-session-evidence-dual-memory-mvp.md](/Users/lixp7/workspace/pyWorkspace/claude-code/memory_design/12-session-evidence-dual-memory-mvp.md)
 
 ## 建议阅读顺序
 

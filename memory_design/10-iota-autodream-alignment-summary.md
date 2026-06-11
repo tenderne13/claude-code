@@ -130,7 +130,31 @@ stateDiagram-v2
 
 `MemoryChangedEvent` 描述“记忆发生了什么变化”；`MemoryUsageFeedbackEvent` 描述“记忆在真实使用中效果如何”。两者共同构成持续治理闭环。
 
-## 8. 建议落地路径
+## 8. 五个关键问题的结论
+
+### 8.1 做梦的 sessions 范围
+
+Claude Code 默认只扫描当前工作目录对应项目中，自上次 consolidation 后发生过活动的合法主 session；排除当前 session 和 subagent transcript。它不是全局扫描，也不是固定读取最近 N 个 session。
+
+### 8.2 做梦的频率
+
+系统会在每个符合条件的主线程 turn 结束时检查，但默认只有同时满足“距离上次 consolidation 至少 `24` 小时”和“新增至少 `5` 个合格 session”才真正做梦。时间条件满足但 session 数不足时，最多每 `10` 分钟重新扫描一次。
+
+### 8.3 Claude Code 触发 memory 的时机
+
+记忆链路分为三层：主 agent 在执行中通过 memory tools 主动写入；每个合格 turn 结束后由 extractor 补提取遗漏记忆；满足慢周期门控后由 autoDream 做合并、修正和裁剪。iota 应将前两者映射为 `iota-memory` MCP / memory tools，将 autoDream 映射为后台 mutation 编排。
+
+### 8.4 Prompt 如何替换
+
+不整段替换上游 system prompt，而是分别维护运行时 memory 指引、turn-end extractor prompt、后台 consolidation prompt 和 recall capsule。Prompt 独立版本化并在 session 边界发布，替换能力边界而不是持续 patch 上游文本。
+
+### 8.5 Memory 与 Skill 是否可以兼得
+
+可以。事实、偏好、决策和经验写入个人或团队 memory；可复用流程先形成经过验证的 `procedure` 团队知识，再由独立 Skill Publisher 生成或更新 Hermes Skill。Memory 负责知识与证据治理，Skill 负责可执行流程，两者通过来源和版本关系关联。
+
+MVP 阶段只需产出 `procedure` memory，不自动修改 Skill；效果稳定后再增加 Skill 发布和演进链路。
+
+## 9. 建议落地路径
 
 ### P1：后台调度骨架
 
@@ -167,7 +191,7 @@ stateDiagram-v2
 - 发布 `MemoryUsageFeedbackEvent`
 - 基于成功率、纠正率和失败率触发优化、降级或回滚
 
-## 9. 一句话建议
+## 10. 一句话建议
 
 建议将 `iota` 建设为一条“多用户隔离下的双记忆持续治理链路”：
 

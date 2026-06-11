@@ -49,6 +49,34 @@
 
 这说明 `autoDream` 是受控的后台治理能力，不是每轮都执行的在线流程。
 
+#### 真实默认参数
+
+| 参数 | Claude Code 默认值 | 实际含义 |
+| --- | --- | --- |
+| `minHours` | `24` 小时 | 距离上次成功 consolidation 至少满 24 小时，才继续检查 session 数量 |
+| `minSessions` | `5` 个 | 上次 consolidation 后，至少有 5 个合格 session，才真正执行 dream |
+| session scan throttle | `10` 分钟 | 时间门控已满足但 session 数不足时，最多每 10 分钟重新扫描一次 |
+| stale lock | `1` 小时 | consolidation lock 超过 1 小时可按过期锁恢复；该值不是做梦频率 |
+
+`minHours` 和 `minSessions` 必须同时满足。系统会在每个符合条件的主线程 turn 结束时检查是否需要 autoDream，但真正执行 consolidation 的默认条件是：
+
+> 距离上次 consolidation 至少 24 小时，并且当前项目在此期间至少积累了 5 个合格 session。
+
+如果任务失败，系统会回滚本次 consolidation 时间戳，使后续检查仍可重试。
+
+#### 做梦的 session 范围
+
+Claude Code 默认只整理当前工作目录对应项目的 session，不做跨项目或全局扫描。合格 session 范围为：
+
+- 位于当前项目 transcript 目录中的合法主 session JSONL
+- 文件修改时间晚于上次 consolidation 时间，表示 session 在此期间被创建或继续活动
+- 排除当前正在运行的 session
+- 排除 `agent-*.jsonl` 等 subagent transcript
+
+因此，session 门控统计的不是“最近固定 N 个 session”，而是“当前项目自上次 consolidation 后发生过活动的全部合格主 session”。这些 session ID 会作为证据线索交给 dream agent，但 agent 仍被要求只做窄范围检索，不应逐个全量读取 transcript。
+
+此外，以下场景不会触发 autoDream：KAIROS 模式、remote 模式、`--bare` / SIMPLE 模式、auto memory 被禁用或 autoDream 未启用。
+
 ### 2.3 输入信号
 
 `autoDream` 不会粗暴全量读取 transcript，而是按优先级收集信号：
@@ -215,6 +243,20 @@ Session transcripts：`<transcriptDir>`
 5. 最后返回本次整理摘要
 
 这也是为什么 `iota` 对齐时，重点不应放在“怎么存一条 memory”，而应放在“怎么做 consolidation + rewrite + prune + change event”。
+
+### 2.7 Claude Code 触发 memory 的时机
+
+Claude Code 的 memory 写入并不只有 autoDream，而是包含三条互补链路：
+
+| 时机 | 作用 | Claude Code 原始实现 | iota 对齐方式 |
+| --- | --- | --- | --- |
+| 主 agent 执行过程中 | 用户明确要求记住，或 agent 判断信息应立即持久化 | 主 agent 直接写 memory 文件 | 主 agent 调用 `iota-memory` MCP / memory tools |
+| 每个合格主线程 turn 结束 | 补提取本轮遗漏的 durable memory | `extractMemories` fork agent；默认每个合格 turn 检查 | 后台 extractor 调用 memory write/classify tools |
+| 满足时间与 session 门控后 | 合并、修正、裁剪已有长期记忆 | `autoDream` consolidation agent | `AutoConsolidationCoordinator` 调用 mutation API |
+
+主 agent 如果已经在本轮主动写过 memory，Claude Code 的 `extractMemories` 会跳过对应范围，避免重复写入。autoDream 则不负责补写某一轮内容，而负责较慢周期的长期治理。
+
+Claude Code 原始 auto-memory 使用受限文件工具读写本地 memory，并不是 MCP。iota 替换本地文件能力后，应把主 agent 和 turn-end extractor 的写入统一映射为 `iota-memory` MCP / memory tools；autoDream 类整理则通过显式的 `create / merge / supersede / delete` mutation API 落地。
 
 ---
 
@@ -410,6 +452,30 @@ Session transcript、summary、tool call、执行轨迹不作为第三类长期�
 - 常见失败与恢复方式
 
 这吸收了 Hermes “不是只记录发生了什么，而是提炼以后应该怎么做”的设计思想。
+
+### 5.6 Memory 与 Skill 是否可以兼得
+
+可以兼得，但不能把两者视为同一种产物：
+
+- Memory 回答“已经知道什么”，用于检索、上下文注入、版本治理和证据追溯。
+- Skill 回答“以后如何稳定执行”，是可调用、可验证、可演进的过程资产。
+
+建议采用两阶段产出：
+
+```mermaid
+flowchart LR
+    A[Session Evidence] --> B{知识分类}
+    B -->|Fact / Preference / Decision / Lesson| C[Personal or Team Memory]
+    B -->|Reusable Procedure| D[Team Procedure Candidate]
+    D --> E[验证与审批]
+    E -->|通过| F[Published Team Memory]
+    E -->|具备稳定执行价值| G[Skill Publisher]
+    G --> H[Hermes Skill]
+```
+
+第一阶段先将可复用流程沉淀为团队知识中的 `procedure` memory，保留来源证据、适用条件、步骤和验证方式。后续再由独立 `SkillPublisher / SkillEvolution` 消费已验证的 procedure，生成或更新 Hermes Skill。
+
+这样 Claude Code 可以通过 memory tools 持续写入和整理记忆，Hermes 也可以从已验证知识中演进 Skill。Skill 的变更应关联来源 memory、证据和版本，但不建议让 `iota-memory` 直接负责 Skill 文件存储或自动修改。
 
 ---
 
@@ -925,6 +991,20 @@ flowchart LR
 
 - `iota-core` 提供 consolidation 输入并产出整理决策
 - `iota-memory` 负责执行 memory 变更并输出事件
+
+### 10.4 Prompt 替换策略
+
+不建议直接修改或整段替换 Claude Code、Hermes 的原始 system prompt。更稳定的方式是按能力边界分层注入：
+
+1. 运行时 memory 指引：在稳定 system prompt / tool schema 中说明何时调用 iota memory tools，替代“写本地 memory 文件”的行为。
+
+2. turn-end 提取 Prompt：使用独立 extractor prompt，只从当前 turn/session 增量中提取 durable memory，并调用 iota memory tools 写入。
+
+3. 后台 consolidation Prompt：使用独立 dream/consolidation prompt，读取 session evidence 与已有 active memory，输出显式 mutation 决策。
+
+4. recall Prompt capsule：继续由 `MemoryContextService` 按任务召回并注入 `<iota-memory>`，不把全部历史长期固定在 system prompt 中。
+
+Prompt 应有独立版本号，并在 session 边界灰度发布，避免运行中的 session 热替换导致行为和缓存前缀不稳定。整体原则是替换“记忆能力边界”，而不是持续 patch 上游 Prompt 文本。
 
 ---
 
