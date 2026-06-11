@@ -2,147 +2,173 @@
 
 ## 1. 要解决什么问题
 
-当前 `iota-core` 和 `iota-memory` 已经分别解决了两件事：
+当前 `iota-core` 和 `iota-memory` 已经解决：
 
 - session transcript 不再依赖本地存储，具备集群能力
 - 长期记忆不再依赖本地 markdown，具备服务化能力
 
-但还缺一条关键链路：
+但仍缺少一条完整的后台记忆治理链路：
 
-> 缺少类似 `autoDream` 的后台记忆整理能力，无法持续把近期 session 中的新信息整理进长期记忆，也无法把“记忆被改写”作为正式事件暴露出来。
+> 系统需要从多用户 session 中持续整理个人记忆，并将具有复用价值的经验受控地提升为团队共享知识；所有改写、发布和使用效果都必须可感知、可验证、可审计、可回滚。
 
-这也是本次对齐的核心目标。
-
-## 2. 结论
+## 2. 核心结论
 
 `autoDream` 的本质不是“再存一条 memory”，而是后台长期记忆治理：
 
 - 从近期 session 中收集增量信号
 - 与已有长期记忆做对比
-- 对记忆执行合并、修正、替换、删除
-- 输出本次整理结果
+- 对记忆执行合并、修正、替换和删除
+- 保持索引轻量并输出整理结果
 
-`iota` 对齐时，不需要复刻 `Claude Code` 的 `MEMORY.md + topic files` 文件形态，但必须补齐同等能力：
+Hermes 的持续学习方案进一步补充了：
 
-1. 后台 consolidation 调度
-2. 基于近期 session 的记忆整理编排
-3. 记忆改写事件
-4. 多用户隔离下的安全治理
+- 将“发生过什么”与“以后应该怎么做”区分开
+- 从成功路径、错误恢复和用户纠正中提炼可复用知识
+- 用验证、审批和回归门禁控制知识发布
+- 根据真实使用反馈持续优化或回滚
 
-## 3. 职责边界
+因此，`iota` 第一阶段只建设两大类长期记忆：
 
-建议明确分层，避免能力混杂。
+| 类型 | 典型内容 | 默认 scope | 生效策略 |
+| --- | --- | --- | --- |
+| 个人记忆 | 用户偏好、习惯、背景、个人工作方式和经验 | `user` | 用户隔离域内整理后生效 |
+| 团队共享知识记忆 | 项目事实、决策、最佳实践、故障经验和可复用流程 | `team/project` | 候选经过验证和审批后发布 |
+
+Session transcript、summary、tool call 和执行轨迹属于证据来源层，不作为第三类长期记忆。
+
+## 3. 总体流程
+
+```mermaid
+flowchart LR
+    A[Session Evidence] --> B[AutoConsolidationCoordinator]
+    B --> C{Memory Classification}
+    C -->|Personal| D[Personal Memory]
+    C -->|Reusable Team Value| E[Team Knowledge Candidate]
+    E --> F[Validation and Approval]
+    F -->|Approved| G[Published Team Knowledge]
+    F -->|Rejected| H[Retain Evidence and Feedback]
+    D --> I[iota-memory]
+    G --> I
+    I --> J[MemoryChangedEvent]
+    I --> K[Runtime Recall]
+    K --> L[MemoryUsageFeedbackEvent]
+    L --> B
+```
+
+个人记忆不能因为被频繁使用就自动共享给团队。任何 `user -> team/project` 的 scope promotion 都必须通过独立提升流程，普通 merge API 不允许跨 scope 写入。
+
+## 4. 职责边界
 
 `iota-core` 负责：
 
-- 从 `RedisClaudeSessionStore` / `RedisConversationStore` 收集近期 session 信号
-- 做时间门控、session 数门控、并发锁控制
-- 组织 consolidation 输入
-- 调用模型或独立 agent 产出整理决策
+- 从 `RedisClaudeSessionStore` / `RedisConversationStore` 收集 session evidence
+- 做时间门控、session 数门控、并发锁和隔离域调度
+- 区分个人记忆与团队知识候选
+- 编排 consolidation、验证、审批和发布
+- 汇总真实使用反馈，触发重新验证、降级或回滚
 
 `iota-memory` 负责：
 
 - 提供统一的 memory query / write / search / classify 能力
-- 提供 `create / supersede / delete / history` 等 mutation 能力
-- 对外发布 `MemoryChangedEvent`
+- 提供 `create / merge / supersede / delete / promote / publish / rollback` 能力
+- 维护 ledger、index、状态、版本链、证据 lineage 和审批信息
+- 发布 `MemoryChangedEvent`
+- 接收并保存 `MemoryUsageFeedbackEvent`
 
-不建议让 `iota-memory` 内嵌智能体或 dream agent。否则 memory service 会和 agent orchestration 耦合，边界会变差。
+不建议让 `iota-memory` 内嵌 dream agent 或直接扫描 Redis transcript，否则会让 memory domain 与 agent orchestration 耦合。
 
-## 4. 多用户约束
+## 5. 多用户与双记忆约束
 
-`Claude Code` / `Hermes` 的 `autoDream` 基本建立在单用户前提上；`iota` 不是。
-
-因此 `iota` 的 consolidation 不能按“全局统一做梦”设计，而必须按隔离域执行。最小治理单元建议是：
-
-- `user_scope_id`
-- `project_scope_id`
-- `agent_namespace`
-
-所有 consolidation job、memory query、memory write、change event 都必须带：
+所有 consolidation job、memory query、memory write 和 event 都必须带：
 
 - `isolation_key`
 - `scope_type`
 - `scope_id`
 
-否则会有跨用户串扰和误改写风险。
+两类记忆遵循不同治理规则：
 
-## 5. 记忆怎么整理
+- 个人记忆只允许在当前用户隔离域内自动整理和改写。
+- 团队知识必须具有跨 session 或跨成员复用价值，不能包含个人偏好或无权共享内容。
+- 团队知识中的 `procedure` 对应可复用 Skill，应包含适用条件、步骤、工具、验证方式和失败恢复。
+- 团队知识默认从 candidate 开始，不能直接进入 active recall。
 
-建议把整理过程定义为一条后台链路，而不是单次写入动作：
+## 6. 团队知识提升与质量门禁
 
-1. `iota-core` 收集最近一段时间的 session summary、recent transcript hint、已有长期记忆摘要
-2. consolidation agent 基于这些输入产出决策：
-   - `create`
-   - `merge`
-   - `supersede`
-   - `delete`
-   - `keep`
-3. `iota-memory` 执行正式写回
-4. 每次改写都生成 `MemoryChangedEvent`
+团队知识建议支持以下状态：
 
-整理原则建议保持和 `autoDream` 一致：
+```mermaid
+stateDiagram-v2
+    [*] --> Candidate
+    Candidate --> Validating
+    Validating --> Active: 验证通过并审批
+    Validating --> Rejected: 验证失败或存在风险
+    Active --> Superseded: 新版本发布
+    Active --> Deprecated: 无效或失败反馈过多
+```
 
-- 优先更新已有主题，不堆重复记忆
-- 允许旧记忆被新证据覆盖
-- 相对时间改写成绝对时间
-- 过滤临时任务状态、debug 噪声、一次性路径信息
+发布前至少检查：
 
-## 6. 为什么“记忆被改写”一定要事件化
+- Scope 与隐私：不能包含个人隐私或无权共享内容
+- 来源证据：保留来源 session、成员数量、观察时间和关键轨迹
+- 复用价值：不是一次性任务状态
+- 语义一致性：不与现有 active knowledge 无解释地冲突
+- 效果验证：procedure 应通过任务级验证
+- 人工审批：高风险 decision / procedure 必须人工批准
 
-只保留最终 memory 状态不够，因为系统还需要知道：
+`supersede` 只能表达新版本替换旧版本，不能证明新版本更好，因此验证和审批是团队知识发布的必要能力。`rollback` 是恢复上一已验证版本的治理动作，不作为独立长期状态。
 
-- 哪条记忆被谁改了
-- 为什么改
-- 改写前后是什么关系
-- 是否影响了其他 scope 或其他消费方
+## 7. 渐进召回与反馈闭环
 
-因此建议把 `MemoryChangedEvent` 作为正式领域事件输出，至少覆盖：
+为避免知识规模增长直接推高 prompt 成本，召回应采用渐进加载：
 
-- `created`
-- `updated`
-- `superseded`
-- `deleted`
+1. 少量稳定个人偏好和关键团队规则可高优先级召回。
+2. 默认只返回 knowledge name、summary、适用条件和版本信息。
+3. 当前任务明确命中后，再加载完整知识正文。
+4. 只有审计或重新验证时，才加载来源 session 和执行轨迹。
 
-事件中建议带上：
+运行时需要记录知识是否被召回、采用、执行成功、用户纠正、关联失败或长期未使用。
 
-- `isolation_key`
-- `memory_id`
-- `previous_memory_id` / `superseded_ids`
-- `scope_type` / `scope_id`
-- `source`
-- `job_id`
-- `changed_at`
-- `reason`
+`MemoryChangedEvent` 描述“记忆发生了什么变化”；`MemoryUsageFeedbackEvent` 描述“记忆在真实使用中效果如何”。两者共同构成持续治理闭环。
 
-## 7. 建议落地路径
+## 8. 建议落地路径
 
-建议分三步推进：
+### P1：后台调度骨架
 
-### P1：补齐后台调度骨架
-
-- 在 `iota-core` 增加 consolidation coordinator
-- 补时间门控、session 门控、并发锁
+- 增加 consolidation coordinator
+- 补时间门控、session 门控、并发锁和隔离域调度
 - 打通 session summary / hint 输入
 
-### P2：补齐整理编排与 mutation API
+### P2：整理编排与 mutation API
 
-- 在 `iota-core` 增加 consolidation agent 编排
-- 在 `iota-memory` 明确 `create / supersede / delete / history` API
-- 建立整理决策到正式写回的链路
+- 增加 consolidation agent 编排
+- 明确 `create / merge / supersede / delete / history` API
+- 打通个人记忆整理链路
 
-### P3：补齐改写事件与审计
+### P3：改写事件链路
 
 - 发布 `MemoryChangedEvent`
+- 对 create、supersede、delete、promote、publish 和 rollback 发出正式事件
+
+### P4：可视化与审计
+
+- 建设 manifest 视图
 - 提供按 user / project / namespace 查询的审计视图
-- 支持回看某次 consolidation 改了哪些记忆
+- 展示 active、candidate、superseded、deprecated 和 deleted 状态
+- 支持回看来源证据、审批信息和版本演化链
 
-## 8. 一句话建议
+### P5：团队知识提升与质量门禁
 
-建议把 `autoDream` 对齐成一条“多用户隔离下的后台记忆治理链路”：
+- 增加 candidate、validation、approval、publish 和 rollback
+- 实施证据、隐私、效果和人工审批门禁
 
-- 智能整理在 `iota-core`
-- memory domain 在 `iota-memory`
-- 改写事件正式化
-- 所有能力按 `scope + isolation_key` 隔离运行
+### P6：渐进召回与使用反馈
 
-这样既能对齐 `autoDream` 的核心价值，也不会破坏 `iota` 现有服务边界。
+- 建设 manifest-first、detail-on-demand 的召回链路
+- 发布 `MemoryUsageFeedbackEvent`
+- 基于成功率、纠正率和失败率触发优化、降级或回滚
+
+## 9. 一句话建议
+
+建议将 `iota` 建设为一条“多用户隔离下的双记忆持续治理链路”：
+
+> 从 session 证据中整理个人记忆，将可复用经验提升为经过验证和审批的团队共享知识，并通过改写事件、渐进召回和真实使用反馈持续演进。

@@ -355,8 +355,8 @@ Session transcripts：`<transcriptDir>`
 1. 调度粒度  
    consolidation job 必须按隔离键触发，不能全局扫描所有用户 transcript。
 
-2. 候选记忆查询  
-   `candidate_active_memories` 必须严格带 scope 条件，不能因为语义相似就跨用户或跨项目合并。
+2. 现有记忆查询
+   `existing_active_memories` 必须严格带 scope 条件，不能因为语义相似就跨用户或跨项目合并。
 
 3. 改写权限  
    某个 consolidation job 只能改写自己隔离域内的 memory，不能动别的用户或别的项目的 active 记录。
@@ -373,6 +373,43 @@ Session transcripts：`<transcriptDir>`
 
 - 所有 consolidation 输入、候选查询、写回动作、改写事件，必须带明确的多用户隔离键
 - 任何未带隔离键的 dream job 都不允许落地执行
+
+### 5.4 第一阶段只建设两大类长期记忆
+
+结合 Hermes 的分层记忆和持续学习思想，`iota` 第一阶段应主动收敛，只建设两大类长期记忆：
+
+| 记忆类型 | 服务对象 | 典型内容 | 默认 scope | 生效要求 |
+| --- | --- | --- | --- | --- |
+| 个人记忆 | 单个用户 | 用户偏好、习惯、个人背景、个人工作方式、个人经验 | `user` | 在用户隔离域内整理后可生效 |
+| 团队共享知识记忆 | 团队或项目 | 项目事实、架构决策、最佳实践、故障经验、可复用流程 | `team/project` | 必须经过提升、验证与审批流程 |
+
+Session transcript、summary、tool call、执行轨迹不作为第三类长期记忆。它们属于证据来源层，用于证明个人记忆或团队知识为什么应该创建、更新或废弃。
+
+两类记忆必须遵守以下边界：
+
+1. 个人记忆默认只服务本人，不能因为被频繁使用就自动共享给团队。
+2. 团队共享知识必须具有跨 session 或跨成员复用价值，不能保存个人偏好。
+3. 从个人经验中发现的团队价值，只能先生成团队知识候选，不能直接写入团队 active memory。
+4. 团队知识的发布、改写和删除需要比个人记忆更严格的质量门禁。
+
+### 5.5 团队知识的内容形态
+
+团队共享知识仍然属于 memory domain，不需要再引入第三套独立存储模型。建议通过 `record_kind` 区分内容形态：
+
+- `fact`：稳定项目事实和环境约束
+- `decision`：架构决策、取舍理由和适用边界
+- `procedure`：可复用工作流程，对应 Hermes 中的 Skill / procedural memory
+- `lesson`：故障原因、错误恢复和经验结论
+
+其中 `procedure` 不能只保存一句结论，至少应包含：
+
+- 适用条件
+- 执行步骤
+- 所需工具或依赖
+- 成功验证方式
+- 常见失败与恢复方式
+
+这吸收了 Hermes “不是只记录发生了什么，而是提炼以后应该怎么做”的设计思想。
 
 ---
 
@@ -435,40 +472,75 @@ Session transcripts：`<transcriptDir>`
 
 如果没有 summary/hint，后台整理只能扫大段 transcript，成本高且效果差。
 
+### 6.6 缺个人经验到团队知识的提升链路
+
+当前方案可以把 session 信号整理成 memory，但还没有明确回答：
+
+- 哪些内容只能留在个人记忆
+- 哪些个人经验具有团队复用价值
+- 团队知识候选如何验证和审批
+- 发布后的团队知识效果如何持续评估
+
+如果缺少这条链路，系统容易走向两个极端：
+
+- 所有内容都留在个人 scope，团队无法复用有效经验
+- 个人经验被直接提升到团队 scope，造成错误知识或隐私污染
+
+### 6.7 缺知识质量评估与反馈闭环
+
+`supersede` 只能表达版本替换，不能证明新版本比旧版本更好。
+
+团队共享知识还需要补齐：
+
+- 来源证据和 lineage
+- 候选版本与发布版本
+- 质量评分和验证结果
+- 人工审批与回滚
+- 实际召回、采用、成功、纠正和失败反馈
+
+这部分借鉴 Hermes Self-Evolution 中“真实会话产生候选、评测作为门禁、人工审批后发布、使用反馈继续驱动优化”的闭环思想。
+
 ---
 
 ## 7. 对齐方案总览
 
-建议把对齐方案定义为三层：
+建议把对齐方案定义为四层：
 
-1. `iota-core`：后台整理调度层
-2. `iota-memory`：长期记忆读写与版本治理层
-3. `MemoryChangedEvent`：改写感知与审计层
+1. Session evidence：transcript、summary、tool call、执行轨迹等证据来源层
+2. `iota-core`：后台整理、知识提升与验证编排层
+3. `iota-memory`：个人记忆和团队共享知识的读写与版本治理层
+4. Event / feedback：改写感知、审计与效果反馈层
 
 架构关系如下：
 
 ```mermaid
 flowchart LR
-    A[RedisClaudeSessionStore / RedisConversationStore] --> B[AutoConsolidationCoordinator]
-    B --> C[Session Summary / Transcript Hints Builder]
-    C --> D[Consolidation Agent / Policy]
-    D --> E[iota-memory Mutation API]
-    E --> F[Ledger MySQL]
-    E --> G[Index ES or Milvus]
-    E --> H[MemoryChangedEvent Outbox]
-    H --> I[Runtime / Audit / Ops / Downstream Subscribers]
+    A[Session Transcript / Summary / Tool Trace] --> B[AutoConsolidationCoordinator]
+    B --> C{Memory Classification}
+    C -->|Personal| D[Personal Memory Consolidation]
+    C -->|Reusable Team Value| E[Team Knowledge Candidate]
+    D --> F[iota-memory Mutation API]
+    E --> G[Validation and Approval Gate]
+    G -->|Approved| F
+    G -->|Rejected| H[Retain Evidence / Feedback]
+    F --> I[Ledger and Index]
+    F --> J[MemoryChangedEvent Outbox]
+    J --> K[Runtime / Audit / Ops]
+    K --> L[Usage Feedback]
+    L --> B
 ```
 
 这条链路里：
 
-- `iota-core` 负责拿 session 增量、组织整理输入，并触发 consolidation job
-- `iota-memory` 只负责长期记忆的查询、写入、版本替换、事件输出
-- 改写结果通过事件输出给外部感知
+- `iota-core` 负责拿 session 增量、组织整理输入、区分个人记忆与团队知识候选，并编排验证和审批
+- `iota-memory` 负责两类长期记忆的查询、写入、状态流转、版本替换和事件输出
+- 改写结果通过事件输出给外部感知，使用效果通过反馈事件回流到下一轮整理
 
 这里需要再补一条多用户约束：
 
 - 每个 consolidation job 必须绑定明确的隔离键，例如 `user_scope_id + project_scope_id`
 - job 的查询范围、改写范围、事件范围都不得越过该边界
+- 个人记忆提升为团队知识时，必须经过显式 scope promotion，不能通过普通 merge 跨 scope 写入
 
 ---
 
@@ -515,21 +587,21 @@ Claude Code 的组织方式：
   - `session_scope_ids[]`
 - `recent_session_summaries[]`
 - `recent_transcript_hints[]`
-- `candidate_active_memories[]`
+- `existing_active_memories[]`
 - `classification_profile`
 
-其中 `candidate_active_memories` 用于让整理器知道“当前长期记忆已经长什么样”，避免每次都从零生成。
+其中 `existing_active_memories` 用于让整理器知道“当前长期记忆已经长什么样”，避免每次都从零生成。
 
 这里的“整理器”建议放在 `iota-core` 的 coordinator 或独立 orchestration service 中，而不是放进 `iota-memory`。  
 `iota-memory` 只需要提供：
 
-- 取 candidate active memories 的查询能力
+- 取 existing active memories 的查询能力
 - 执行写入/替换/删除的能力
 - 输出 memory change event 的能力
 
 多用户场景下再补一条：
 
-- `candidate_active_memories` 的读取条件必须同时包含 `isolation_key` 与相关 scope，禁止只按文本或 selector 做宽查询
+- `existing_active_memories` 的读取条件必须同时包含 `isolation_key` 与相关 scope，禁止只按文本或 selector 做宽查询
 
 ### 8.4 建议的整理决策类型
 
@@ -591,10 +663,138 @@ Claude Code 的组织方式：
 建议将 active memory 与历史 memory 分层：
 
 - active：当前 recall 主路径可见
+- candidate：已提取但尚未满足发布条件，不参与正式 recall
+- validating：正在进行规则验证、离线评测或人工审批
+- rejected：未通过验证、审批或隐私检查，保留原因但不参与 recall
+- deprecated：曾经生效但已不建议继续使用
 - superseded：不参与主 recall，但参与审计与回放
 - deleted：明确软删除，不参与 recall
 
 这与 `autoDream` 的“修正源头而不是无限累积错误”保持一致。
+
+### 8.8 个人记忆与团队共享知识的整理策略
+
+两类记忆共享 consolidation 基础设施，但不能共享完全相同的写入策略。
+
+个人记忆整理重点：
+
+- 从用户自己的 session 中提取偏好、习惯、背景和个人经验
+- 只在当前用户隔离域内合并和改写
+- 用户明确表达和多次稳定行为可以作为高置信信号
+- 用户纠正应优先触发旧个人记忆的修正
+
+团队共享知识整理重点：
+
+- 从一个或多个成员的成功路径、错误恢复、用户纠正和项目决策中发现可复用知识
+- 优先形成 `fact / decision / procedure / lesson`
+- 必须保留来源证据，不允许只保留模型生成的结论
+- 在验证和审批完成前只能处于 candidate 状态
+
+### 8.9 从个人经验提升为团队知识
+
+个人经验不能通过普通 scope merge 直接变成团队知识，必须经过显式提升流程：
+
+```mermaid
+stateDiagram-v2
+    [*] --> Evidence: Session / Summary / Tool Trace
+    Evidence --> PersonalActive: 仅对个人长期有价值
+    Evidence --> TeamCandidate: 具有跨成员复用价值
+    PersonalActive --> TeamCandidate: 发现可共享价值
+    TeamCandidate --> Validating: 满足最低证据条件
+    Validating --> TeamActive: 验证通过并审批
+    Validating --> Rejected: 验证失败或存在隐私风险
+    TeamActive --> Superseded: 新知识通过验证
+    TeamActive --> Deprecated: 长期无效或失败反馈过多
+    Superseded --> [*]
+    Deprecated --> [*]
+    Rejected --> [*]
+```
+
+建议提升动作显式建模为：
+
+- `promote_candidate`：从个人经验或 session evidence 生成团队知识候选
+- `validate_candidate`：执行规则校验、证据校验和离线评测
+- `approve` / `reject`：人工或策略审批
+- `publish`：进入团队 active recall
+- `rollback`：回退到上一个已验证版本
+
+### 8.10 团队知识质量门禁
+
+团队知识候选发布前至少需要经过以下检查：
+
+| 门禁 | 检查内容 |
+| --- | --- |
+| Scope 与隐私门禁 | 不包含个人偏好、个人身份信息或无权共享内容 |
+| 证据门禁 | 保留 `source_session_ids`、来源成员数量、观察时间和关键轨迹 |
+| 复用价值门禁 | 对团队或项目具有跨 session 复用价值，不是一次性任务状态 |
+| 语义门禁 | 与已有 active knowledge 不重复、不冲突，或明确说明替换关系 |
+| 效果门禁 | 可验证的 procedure 应通过任务级测试；其他知识至少通过规则或人工评审 |
+| 审批门禁 | 高风险 `decision / procedure` 必须人工批准后发布 |
+
+建议为团队知识增加以下治理 metadata：
+
+- `knowledge_status`
+- `confidence`
+- `evidence_count`
+- `source_user_count`
+- `validation_method`
+- `validation_result`
+- `approved_by`
+- `approved_at`
+- `rollback_memory_id`
+
+这里应借鉴 Hermes Self-Evolution 的原则：
+
+> 局部候选表现更好，不代表可以直接发布；必须通过独立验证和回归门禁，且高风险变更需要人工审批。
+
+### 8.11 渐进召回与上下文预算
+
+Hermes 将 prompt memory、session search 和 skill content 分层加载，核心价值是避免知识规模增长直接导致上下文成本增长。`iota` 也应采用渐进召回：
+
+1. 常驻或高优先级层
+   只包含少量稳定个人偏好和关键团队规则。
+
+2. Manifest 层
+   默认只返回 knowledge name、summary、适用条件、scope 和版本信息。
+
+3. Detail 层
+   当前任务明确命中后，再加载完整事实、决策背景或 procedure 正文。
+
+4. Evidence 层
+   只有在需要解释、审计或重新验证时，才加载来源 session 和执行轨迹。
+
+这样可以让团队知识持续增长，但 prompt 注入成本保持可控。
+
+### 8.12 使用反馈闭环
+
+团队知识发布不是终点。系统需要持续记录其实际效果，并将其作为下一轮 consolidation 和验证输入。
+
+建议记录：
+
+- `recalled`：是否被召回
+- `selected`：agent 是否选择使用
+- `applied`：是否实际执行
+- `succeeded`：任务是否成功
+- `corrected`：是否被用户纠正
+- `failed`：是否与失败存在关联
+- `unused`：是否长期未使用
+
+建议反馈流程如下：
+
+```mermaid
+flowchart LR
+    A[Published Personal Memory / Team Knowledge] --> B[Recall and Use]
+    B --> C[Usage Feedback Event]
+    C --> D[Quality Metrics]
+    D --> E{Threshold Check}
+    E -->|Healthy| A
+    E -->|Needs Improvement| F[New Candidate Version]
+    E -->|Unsafe or Invalid| G[Deprecate / Rollback]
+    F --> H[Validation and Approval]
+    H --> A
+```
+
+个人记忆也可以使用反馈纠错，但默认不需要像团队知识一样执行完整发布审批。
 
 ---
 
@@ -619,7 +819,7 @@ Claude Code 的组织方式：
 | 字段 | 含义 |
 | --- | --- |
 | `event_id` | 唯一事件 ID |
-| `event_type` | `created` / `updated` / `superseded` / `deleted` / `merged` |
+| `event_type` | `created` / `updated` / `superseded` / `deleted` / `merged` / `promoted` / `published` / `rolled_back` |
 | `isolation_key` | 本次改写所属隔离键 |
 | `memory_id` | 当前记录 ID |
 | `previous_memory_ids` | 被替换的旧记录 ID 列表 |
@@ -632,6 +832,8 @@ Claude Code 的组织方式：
 | `reason` | 改写原因摘要 |
 | `changed_at` | 改写时间 |
 | `operator` | 自动任务或人工操作者 |
+
+除 `MemoryChangedEvent` 外，建议增加 `MemoryUsageFeedbackEvent`，用于记录记忆或知识在运行时是否被召回、采用、成功执行、纠正或判定失败。前者描述“知识发生了什么变化”，后者描述“知识在真实使用中效果如何”。
 
 ### 9.3 事件触发时机
 
@@ -660,6 +862,8 @@ Claude Code 的组织方式：
   - 支持回溯某条记忆的演化链
 - 后续审批或人工修订工具
   - 在高风险改写场景下加入人工确认
+- 知识质量评估任务
+  - 基于 `MemoryUsageFeedbackEvent` 识别需要重新验证、降级或回滚的团队知识
 
 ---
 
@@ -675,6 +879,9 @@ Claude Code 的组织方式：
 - 按 `user/project/namespace` 维度分片调度
 - 构造整理输入
 - 调用模型或独立 agent 完成 consolidation 决策
+- 区分个人记忆与团队知识候选
+- 编排团队知识验证、审批和发布流程
+- 汇总真实使用反馈，识别需要优化或回滚的知识
 - 调用 `iota-memory` 的 memory query / write / supersede / delete 接口
 - 记录 job 状态与 summary
 
@@ -694,9 +901,11 @@ Claude Code 的组织方式：
 
 - 提供 `write / recall / search / classify` 协议
 - 提供 active memories / history chain 的查询能力
-- 提供显式的 `create / supersede / delete / merge-write` 语义
+- 提供显式的 `create / supersede / delete / merge-write / promote / publish / rollback` 语义
 - 维护 ledger、index、active 视图和历史链
 - 在持久化成功后生成 `MemoryChangedEvent`
+- 保存团队知识状态、证据 lineage、验证结果和审批信息
+- 接收并存储 `MemoryUsageFeedbackEvent`
 - 通过 HTTP/MCP 暴露 memory 工具能力
 
 也就是说，`iota-memory` 是 memory service，不是 dream agent 容器。  
@@ -783,6 +992,34 @@ Claude Code 的组织方式：
 
 - 运营与研发能真正看懂系统在如何整理记忆
 
+### P5：补齐团队知识提升与质量门禁
+
+目标：
+
+- 明确 `personal_memory` 与 `team_knowledge` 两类治理策略
+- 增加 `candidate / validating / active / rejected / deprecated` 状态
+- 增加 `promote / validate / approve / publish / rollback` 能力
+- 增加证据、隐私、效果和人工审批门禁
+
+交付结果：
+
+- 个人经验可以受控地沉淀为团队知识
+- 未验证或包含隐私风险的候选不能进入团队 active recall
+
+### P6：补齐渐进召回与使用反馈闭环
+
+目标：
+
+- 建设 manifest-first、detail-on-demand 的渐进召回
+- 增加 `MemoryUsageFeedbackEvent`
+- 建立召回率、采用率、成功率、纠正率和失败率指标
+- 支持基于反馈触发重新验证、降级和回滚
+
+交付结果：
+
+- 知识规模增长不会线性推高 prompt 成本
+- 团队知识可以根据真实效果持续演进
+
 ---
 
 ## 12. 风险与控制点
@@ -844,6 +1081,38 @@ ledger 成功、index 失败、event 成功或失败的顺序不一致，会带�
 - event 采用 outbox 模式
 - index 失败可重建，event 失败可重放
 
+### 12.6 个人信息错误提升为团队知识
+
+如果个人记忆未经检查直接提升到团队 scope，可能泄露个人偏好、身份信息或私有上下文。
+
+控制建议：
+
+- 普通 merge API 禁止跨 `user -> team/project` scope
+- scope promotion 必须使用独立动作并通过隐私门禁
+- 团队知识候选默认只保存必要证据引用，不复制无关个人原文
+- 高风险候选必须人工审批
+
+### 12.7 未验证知识被广泛传播
+
+错误 procedure 或 decision 一旦进入团队 active recall，会放大单次错误的影响。
+
+控制建议：
+
+- 团队知识默认从 candidate 开始，禁止直接 active
+- 可执行 procedure 必须有成功验证方式
+- 发布后持续监控纠正率和失败率
+- 达到安全阈值时自动停止召回并触发回滚
+
+### 12.8 反馈指标被误用
+
+高召回率或高采用率不等于知识正确，单纯使用热度可能强化错误知识。
+
+控制建议：
+
+- 区分使用指标与质量指标
+- 成功率、纠正率和失败率优先于召回次数
+- 自动评估只生成候选或降级建议，高风险发布与删除保留人工门禁
+
 ---
 
 ## 13. 最终建议
@@ -853,9 +1122,11 @@ ledger 成功、index 失败、event 成功或失败的顺序不一致，会带�
 `iota` 对齐 `autoDream` 的正确方向，不是把 `MEMORY.md` 服务化，而是补齐：
 
 - 后台 consolidation 调度
+- 个人记忆与团队共享知识的双记忆治理
+- 个人经验到团队知识的受控提升
 - 主题归并与版本替换
 - manifest 级索引视图
-- 记忆改写事件
+- 记忆改写事件与使用反馈闭环
 
 ### 13.2 推荐落地原则
 
@@ -865,6 +1136,9 @@ ledger 成功、index 失败、event 成功或失败的顺序不一致，会带�
 4. `selector axis + supersede chain` 作为整理主轴
 5. `manifest projection` 代替 `MEMORY.md` 作为服务化索引视图
 6. 所有整理、写回、事件都必须严格绑定多用户隔离键
+7. 第一阶段只建设个人记忆和团队共享知识两大类长期记忆
+8. 个人记忆不能自动跨 scope 共享，团队知识必须经过候选、验证和审批
+9. 团队知识采用渐进召回，并通过真实使用反馈持续优化或回滚
 
 补充多用户版本的表达可以直接说：
 
